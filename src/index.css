@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --navy-900: #0C2340;
+  --navy-800: #112D4E;
+  --navy-700: #17375C;
+  --navy-600: #1D4170;
+  --navy-500: #254E82;
+  --gold-500: #C9A96E;
+  --gold-400: #D4BC8A;
+  --gold-300: #E0D0A8;
+  --ocean-500: #0EA5E9;
+  --ocean-400: #38BDF8;
+  --foam-50: #F5F7FA;
+  --foam-100: #EDF0F5;
+  --foam-200: #D8DDE6;
+  --slate-700: #2D3748;
+  --slate-600: #4A5568;
+  --slate-500: #718096;
+
+  font-family: 'Noto Sans SC', -apple-system, BlinkMacSystemFont, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.font-display {
+  font-family: 'Playfair Display', serif;
+}
+
+body {
+  background-color: var(--foam-50);
+  color: var(--slate-700);
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--foam-200);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--slate-500);
+}
