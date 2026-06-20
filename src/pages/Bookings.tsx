@@ -1,6 +1,5 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Plus, Calendar, List, XCircle, AlertTriangle, Search } from 'lucide-react'
+import { Plus, Calendar, List, XCircle, AlertTriangle, Search, CalendarClock } from 'lucide-react'
 import { format, parseISO, startOfWeek, addDays, isSameDay } from 'date-fns'
 import { useStore } from '@/store'
 import type { Booking } from '@/types'
@@ -34,6 +33,11 @@ function getDurationHours(start: string, end: string): string {
   return h % 1 === 0 ? `${h}h` : `${h.toFixed(1)}h`
 }
 
+function isTimeValid(startTime: string, endTime: string): boolean {
+  if (!startTime || !endTime) return false
+  return new Date(endTime).getTime() > new Date(startTime).getTime()
+}
+
 interface ModalForm {
   yachtId: string
   customerName: string
@@ -51,7 +55,7 @@ const EMPTY_FORM: ModalForm = {
 }
 
 export default function Bookings() {
-  const { bookings, yachts, addBooking, cancelBooking, rateTiers } = useStore()
+  const { bookings, yachts, addBooking, cancelBooking, rescheduleBooking, rateTiers } = useStore()
   const [activeTab, setActiveTab] = useState<TabKey>('calendar')
   const [weekOffset, setWeekOffset] = useState(0)
   const [searchText, setSearchText] = useState('')
@@ -59,6 +63,8 @@ export default function Bookings() {
   const [form, setForm] = useState<ModalForm>(EMPTY_FORM)
   const [conflict, setConflict] = useState<Booking | null>(null)
   const [submitSuccess, setSubmitSuccess] = useState(false)
+  const [timeError, setTimeError] = useState(false)
+  const [rescheduleId, setRescheduleId] = useState<string | null>(null)
 
   const availableYachts = yachts.filter((y) => y.status === 'available')
 
@@ -89,6 +95,8 @@ export default function Bookings() {
     })
     setConflict(null)
     setSubmitSuccess(false)
+    setTimeError(false)
+    setRescheduleId(null)
     setShowModal(true)
   }
 
@@ -96,13 +104,71 @@ export default function Bookings() {
     setForm(EMPTY_FORM)
     setConflict(null)
     setSubmitSuccess(false)
+    setTimeError(false)
+    setRescheduleId(null)
     setShowModal(true)
+  }
+
+  function handleReschedule(booking: Booking) {
+    const localStart = format(parseISO(booking.startTime), "yyyy-MM-dd'T'HH:mm")
+    const localEnd = format(parseISO(booking.endTime), "yyyy-MM-dd'T'HH:mm")
+    setForm({
+      yachtId: booking.yachtId,
+      customerName: booking.customerName,
+      customerPhone: booking.customerPhone,
+      startTime: localStart,
+      endTime: localEnd,
+    })
+    setConflict(null)
+    setSubmitSuccess(false)
+    setTimeError(false)
+    setRescheduleId(booking.id)
+    setShowModal(true)
+  }
+
+  function validateForm(): boolean {
+    if (!form.startTime || !form.endTime) {
+      setTimeError(true)
+      return false
+    }
+    const valid = isTimeValid(form.startTime, form.endTime)
+    setTimeError(!valid)
+    return valid
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     setConflict(null)
     setSubmitSuccess(false)
+
+    if (!validateForm()) return
+
+    if (rescheduleId) {
+      const result = rescheduleBooking(rescheduleId, {
+        yachtId: form.yachtId,
+        startTime: form.startTime,
+        endTime: form.endTime,
+      })
+      if (result === null) {
+        const conflicting = bookings.find((b) => {
+          if (b.yachtId !== form.yachtId || b.status === 'cancelled' || b.id === rescheduleId) return false
+          const ns = new Date(form.startTime).getTime()
+          const ne = new Date(form.endTime).getTime()
+          const bs = new Date(b.startTime).getTime()
+          const be = new Date(b.endTime).getTime()
+          return ns < be && bs < ne
+        })
+        setConflict(conflicting ?? null)
+      } else {
+        setSubmitSuccess(true)
+        setTimeout(() => {
+          setShowModal(false)
+          setSubmitSuccess(false)
+          setRescheduleId(null)
+        }, 800)
+      }
+      return
+    }
 
     const result = addBooking({
       yachtId: form.yachtId,
@@ -136,6 +202,9 @@ export default function Bookings() {
     b.customerName.toLowerCase().includes(searchText.toLowerCase())
   )
 
+  const modalTitle = rescheduleId ? '订单改期' : '新建预订'
+  const modalSubmitLabel = rescheduleId ? '确认改期' : '提交预订'
+
   const tabs: { key: TabKey; label: string; icon: React.ReactNode }[] = [
     { key: 'calendar', label: '排期日历', icon: <Calendar className="w-4 h-4" /> },
     { key: 'list', label: '预订列表', icon: <List className="w-4 h-4" /> },
@@ -144,7 +213,6 @@ export default function Bookings() {
   return (
     <div className="min-h-screen bg-foam-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl font-bold text-navy-900 font-display">预订管理</h1>
@@ -159,7 +227,6 @@ export default function Bookings() {
           </button>
         </div>
 
-        {/* Tabs */}
         <div className="flex gap-1 bg-foam-100 p-1 rounded-lg w-fit mb-6">
           {tabs.map((tab) => (
             <button
@@ -177,10 +244,8 @@ export default function Bookings() {
           ))}
         </div>
 
-        {/* Calendar Tab */}
         {activeTab === 'calendar' && (
           <div className="bg-white rounded-xl shadow-sm border border-foam-200 overflow-hidden">
-            {/* Week Navigation */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-foam-100">
               <button
                 onClick={() => setWeekOffset((w) => w - 1)}
@@ -199,7 +264,6 @@ export default function Bookings() {
               </button>
             </div>
 
-            {/* Calendar Grid */}
             <div className="overflow-x-auto">
               <table className="w-full min-w-[800px]">
                 <thead>
@@ -266,10 +330,8 @@ export default function Bookings() {
           </div>
         )}
 
-        {/* List Tab */}
         {activeTab === 'list' && (
           <div className="bg-white rounded-xl shadow-sm border border-foam-200 overflow-hidden">
-            {/* Search */}
             <div className="px-6 py-4 border-b border-foam-100 flex items-center gap-3">
               <div className="relative flex-1 max-w-sm">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-navy-500" />
@@ -283,9 +345,8 @@ export default function Bookings() {
               </div>
             </div>
 
-            {/* Table */}
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px]">
+              <table className="w-full min-w-[1000px]">
                 <thead>
                   <tr className="bg-foam-50">
                     <th className="px-4 py-3 text-left text-xs font-semibold text-navy-500 uppercase tracking-wider">预订编号</th>
@@ -312,6 +373,7 @@ export default function Bookings() {
                       const st = STATUS_MAP[b.status]
                       const ap = APPROVAL_MAP[b.approvalStatus]
                       const canCancel = b.status === 'pending' || b.status === 'confirmed'
+                      const canReschedule = b.status === 'pending' || b.status === 'confirmed'
                       return (
                         <tr key={b.id} className="border-t border-foam-100 hover:bg-foam-50/50 transition-colors">
                           <td className="px-4 py-3 text-sm font-mono text-navy-700">{b.id.slice(0, 8)}</td>
@@ -331,15 +393,26 @@ export default function Bookings() {
                             </span>
                           </td>
                           <td className="px-4 py-3">
-                            {canCancel && (
-                              <button
-                                onClick={() => cancelBooking(b.id)}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
-                              >
-                                <XCircle className="w-3.5 h-3.5" />
-                                退订
-                              </button>
-                            )}
+                            <div className="flex items-center gap-1.5">
+                              {canReschedule && (
+                                <button
+                                  onClick={() => handleReschedule(b)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-ocean-500 bg-ocean-500/10 rounded-lg hover:bg-ocean-500/20 transition-colors"
+                                >
+                                  <CalendarClock className="w-3.5 h-3.5" />
+                                  改期
+                                </button>
+                              )}
+                              {canCancel && (
+                                <button
+                                  onClick={() => cancelBooking(b.id)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
+                                >
+                                  <XCircle className="w-3.5 h-3.5" />
+                                  退订
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       )
@@ -351,21 +424,28 @@ export default function Bookings() {
           </div>
         )}
 
-        {/* New Booking Modal */}
         {showModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center">
-            <div className="absolute inset-0 bg-navy-900/50 backdrop-blur-sm" onClick={() => setShowModal(false)} />
+            <div className="absolute inset-0 bg-navy-900/50 backdrop-blur-sm" onClick={() => { setShowModal(false); setRescheduleId(null) }} />
             <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
-              {/* Modal Header */}
               <div className="px-6 py-4 bg-navy-900 text-white flex items-center justify-between">
-                <h2 className="text-lg font-bold font-display">新建预订</h2>
-                <button onClick={() => setShowModal(false)} className="text-white/70 hover:text-white transition-colors">
+                <h2 className="text-lg font-bold font-display">{modalTitle}</h2>
+                <button onClick={() => { setShowModal(false); setRescheduleId(null) }} className="text-white/70 hover:text-white transition-colors">
                   <XCircle className="w-5 h-5" />
                 </button>
               </div>
 
               <form onSubmit={handleSubmit} className="p-6 space-y-4">
-                {/* Conflict Warning */}
+                {timeError && (
+                  <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
+                    <div>
+                      <p className="text-sm font-semibold text-red-800">时间填写有误</p>
+                      <p className="text-xs text-red-600 mt-1">返回时间必须晚于出海时间，请检查后重新填写</p>
+                    </div>
+                  </div>
+                )}
+
                 {conflict && (
                   <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 flex items-start gap-3">
                     <AlertTriangle className="w-5 h-5 text-red-500 mt-0.5 shrink-0" />
@@ -378,10 +458,15 @@ export default function Bookings() {
                   </div>
                 )}
 
-                {/* Success Message */}
                 {submitSuccess && (
                   <div className="bg-green-50 border border-green-200 rounded-lg px-4 py-3 text-sm font-semibold text-green-800">
-                    ✓ 预订创建成功！
+                    ✓ {rescheduleId ? '改期成功！' : '预订创建成功！'}
+                  </div>
+                )}
+
+                {rescheduleId && (
+                  <div className="bg-ocean-500/10 border border-ocean-500/20 rounded-lg px-4 py-3 text-sm text-navy-700">
+                    改期将重置审批状态，修改后需重新提交审批
                   </div>
                 )}
 
@@ -400,30 +485,32 @@ export default function Bookings() {
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-navy-700 mb-1">客户姓名</label>
-                    <input
-                      type="text"
-                      required
-                      value={form.customerName}
-                      onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
-                      className="w-full px-3 py-2.5 text-sm bg-foam-50 border border-foam-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-ocean-500/30 focus:border-ocean-500 transition-colors"
-                      placeholder="请输入客户姓名"
-                    />
+                {!rescheduleId && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-navy-700 mb-1">客户姓名</label>
+                      <input
+                        type="text"
+                        required
+                        value={form.customerName}
+                        onChange={(e) => setForm((f) => ({ ...f, customerName: e.target.value }))}
+                        className="w-full px-3 py-2.5 text-sm bg-foam-50 border border-foam-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-ocean-500/30 focus:border-ocean-500 transition-colors"
+                        placeholder="请输入客户姓名"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-navy-700 mb-1">联系电话</label>
+                      <input
+                        type="text"
+                        required
+                        value={form.customerPhone}
+                        onChange={(e) => setForm((f) => ({ ...f, customerPhone: e.target.value }))}
+                        className="w-full px-3 py-2.5 text-sm bg-foam-50 border border-foam-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-ocean-500/30 focus:border-ocean-500 transition-colors"
+                        placeholder="请输入联系电话"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-navy-700 mb-1">联系电话</label>
-                    <input
-                      type="text"
-                      required
-                      value={form.customerPhone}
-                      onChange={(e) => setForm((f) => ({ ...f, customerPhone: e.target.value }))}
-                      className="w-full px-3 py-2.5 text-sm bg-foam-50 border border-foam-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-ocean-500/30 focus:border-ocean-500 transition-colors"
-                      placeholder="请输入联系电话"
-                    />
-                  </div>
-                </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
@@ -432,8 +519,10 @@ export default function Bookings() {
                       type="datetime-local"
                       required
                       value={form.startTime}
-                      onChange={(e) => setForm((f) => ({ ...f, startTime: e.target.value }))}
-                      className="w-full px-3 py-2.5 text-sm bg-foam-50 border border-foam-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-ocean-500/30 focus:border-ocean-500 transition-colors"
+                      onChange={(e) => { setForm((f) => ({ ...f, startTime: e.target.value })); setTimeError(false) }}
+                      className={`w-full px-3 py-2.5 text-sm bg-foam-50 border rounded-lg focus:outline-none focus:ring-2 focus:ring-ocean-500/30 focus:border-ocean-500 transition-colors ${
+                        timeError ? 'border-red-300' : 'border-foam-200'
+                      }`}
                     />
                   </div>
                   <div>
@@ -442,8 +531,10 @@ export default function Bookings() {
                       type="datetime-local"
                       required
                       value={form.endTime}
-                      onChange={(e) => setForm((f) => ({ ...f, endTime: e.target.value }))}
-                      className="w-full px-3 py-2.5 text-sm bg-foam-50 border border-foam-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-ocean-500/30 focus:border-ocean-500 transition-colors"
+                      onChange={(e) => { setForm((f) => ({ ...f, endTime: e.target.value })); setTimeError(false) }}
+                      className={`w-full px-3 py-2.5 text-sm bg-foam-50 border rounded-lg focus:outline-none focus:ring-2 focus:ring-ocean-500/30 focus:border-ocean-500 transition-colors ${
+                        timeError ? 'border-red-300' : 'border-foam-200'
+                      }`}
                     />
                   </div>
                 </div>
@@ -451,7 +542,7 @@ export default function Bookings() {
                 <div className="flex justify-end gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={() => setShowModal(false)}
+                    onClick={() => { setShowModal(false); setRescheduleId(null) }}
                     className="px-4 py-2.5 text-sm font-medium text-navy-700 bg-foam-100 rounded-lg hover:bg-foam-200 transition-colors"
                   >
                     取消
@@ -460,7 +551,7 @@ export default function Bookings() {
                     type="submit"
                     className="px-6 py-2.5 text-sm font-semibold text-navy-900 bg-gold-500 rounded-lg hover:bg-gold-400 transition-colors shadow-sm"
                   >
-                    提交预订
+                    {modalSubmitLabel}
                   </button>
                 </div>
               </form>

@@ -1,7 +1,6 @@
 import { useStore } from '@/store'
 import type { Bill, BillSegment } from '@/types'
-import { Link, useParams } from 'react-router-dom'
-import { Receipt, DollarSign, CheckCircle, Eye } from 'lucide-react'
+import { Receipt, DollarSign, CheckCircle, Eye, Download } from 'lucide-react'
 import { useState } from 'react'
 import { format, parseISO } from 'date-fns'
 
@@ -17,6 +16,62 @@ const typeLabel: Record<string, string> = {
   peak: '高峰',
   standard: '平峰',
   offpeak: '低谷',
+}
+
+function pad(s: string, len: number): string {
+  while (s.length < len) s += ' '
+  return s.slice(0, len)
+}
+
+function exportBillText(
+  bill: Bill,
+  booking: { customerName: string; customerPhone: string; startTime: string; endTime: string } | undefined,
+  yacht: { name: string; model: string } | null,
+  segments: BillSegment[]
+) {
+  const lines: string[] = []
+  lines.push('================================')
+  lines.push('          游艇出海账单')
+  lines.push('================================')
+  lines.push('')
+  lines.push(`客户姓名：${booking?.customerName ?? '—'}`)
+  lines.push(`联系电话：${booking?.customerPhone ?? '—'}`)
+  lines.push(`游艇名称：${yacht?.name ?? '—'}`)
+  if (yacht?.model) lines.push(`游艇型号：${yacht.model}`)
+  lines.push('')
+  if (booking) {
+    lines.push(`出海时间：${format(parseISO(booking.startTime), 'yyyy-MM-dd HH:mm')}`)
+    lines.push(`返回时间：${format(parseISO(booking.endTime), 'yyyy-MM-dd HH:mm')}`)
+  }
+  lines.push('')
+  lines.push('--------------------------------')
+  lines.push('分段计费明细')
+  lines.push('--------------------------------')
+  lines.push(
+    `${pad('费率档位', 12)}${pad('类型', 6)}${pad('时段范围', 16)}${pad('时长(h)', 8)}${pad('费率(¥/h)', 10)}小计(¥)`
+  )
+  for (const seg of segments) {
+    const timeRange = `${format(parseISO(seg.segmentStart), 'HH:mm')}-${format(parseISO(seg.segmentEnd), 'HH:mm')}`
+    lines.push(
+      `${pad(seg.rateTierName, 12)}${pad(typeLabel[seg.rateTierType] ?? '', 6)}${pad(timeRange, 16)}${pad(seg.durationHours.toFixed(1), 8)}${pad(seg.rate.toLocaleString(), 10)}${seg.subtotal.toLocaleString()}`
+    )
+  }
+  lines.push('--------------------------------')
+  lines.push(`合计：¥${bill.totalAmount.toLocaleString()}`)
+  lines.push('================================')
+  lines.push(`生成日期：${format(parseISO(bill.generatedAt), 'yyyy-MM-dd HH:mm')}`)
+  lines.push(`账单编号：${bill.id.slice(0, 8).toUpperCase()}`)
+
+  const content = lines.join('\n')
+  const blob = new Blob([content], { type: 'text/plain;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `账单_${booking?.customerName ?? 'unknown'}_${format(parseISO(bill.generatedAt), 'yyyyMMdd')}.txt`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
 }
 
 export default function Bills() {
@@ -137,6 +192,29 @@ export default function Bills() {
                       >
                         <Eye className="h-4 w-4" />
                         {isExpanded ? '收起详情' : '查看详情'}
+                      </button>
+                      <button
+                        onClick={() =>
+                          exportBillText(
+                            bill,
+                            booking
+                              ? {
+                                  customerName: booking.customerName,
+                                  customerPhone: booking.customerPhone,
+                                  startTime: booking.startTime,
+                                  endTime: booking.endTime,
+                                }
+                              : undefined,
+                            yacht
+                              ? { name: yacht.name, model: yacht.model }
+                              : null,
+                            getSegments(bill.id)
+                          )
+                        }
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-navy-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-navy-800"
+                      >
+                        <Download className="h-4 w-4" />
+                        导出账单
                       </button>
                       {bill.status === 'unpaid' && (
                         <button

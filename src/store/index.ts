@@ -21,6 +21,7 @@ interface AppState {
   addBooking: (b: Omit<Booking, 'id' | 'createdAt' | 'totalAmount' | 'approvalStatus' | 'approvalComment'>) => string | null
   cancelBooking: (id: string) => void
   completeBooking: (id: string) => void
+  rescheduleBooking: (id: string, updates: { yachtId: string; startTime: string; endTime: string }) => string | null
 
   addRateTier: (r: Omit<RateTier, 'id'>) => void
   updateRateTier: (id: string, r: Partial<RateTier>) => void
@@ -73,6 +74,24 @@ const defaultRateTiers: RateTier[] = [
   { id: 'r5', name: '晚低谷', type: 'offpeak', startTime: '18:00', endTime: '22:00', pricePerHour: 1200, sortOrder: 5 },
 ]
 
+function checkConflict(
+  yachtId: string,
+  startTime: string,
+  endTime: string,
+  bookings: Booking[],
+  excludeId?: string
+): Booking | null {
+  const ns = new Date(startTime).getTime()
+  const ne = new Date(endTime).getTime()
+  return bookings.find((eb) => {
+    if (eb.yachtId !== yachtId || eb.status === 'cancelled') return false
+    if (excludeId && eb.id === excludeId) return false
+    const bs = new Date(eb.startTime).getTime()
+    const be = new Date(eb.endTime).getTime()
+    return ns < be && bs < ne
+  }) ?? null
+}
+
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
@@ -94,17 +113,10 @@ export const useStore = create<AppState>()(
         set((s) => ({ yachts: s.yachts.filter((y) => y.id !== id) })),
 
       addBooking: (b) => {
+        if (new Date(b.endTime).getTime() <= new Date(b.startTime).getTime()) return null
+
         const state = get()
-        const existing = state.bookings.filter(
-          (eb) => eb.yachtId === b.yachtId && eb.status !== 'cancelled'
-        )
-        const ns = new Date(b.startTime).getTime()
-        const ne = new Date(b.endTime).getTime()
-        const conflict = existing.find((eb) => {
-          const bs = new Date(eb.startTime).getTime()
-          const be = new Date(eb.endTime).getTime()
-          return ns < be && bs < ne
-        })
+        const conflict = checkConflict(b.yachtId, b.startTime, b.endTime, state.bookings)
         if (conflict) return null
 
         const id = uid()
@@ -138,6 +150,38 @@ export const useStore = create<AppState>()(
           ),
         })),
 
+      rescheduleBooking: (id, updates) => {
+        if (new Date(updates.endTime).getTime() <= new Date(updates.startTime).getTime()) return null
+
+        const state = get()
+        const conflict = checkConflict(updates.yachtId, updates.startTime, updates.endTime, state.bookings, id)
+        if (conflict) return null
+
+        const existingBill = state.bills.find((b) => b.bookingId === id)
+
+        set((s) => ({
+          bookings: s.bookings.map((b) =>
+            b.id === id
+              ? {
+                  ...b,
+                  yachtId: updates.yachtId,
+                  startTime: updates.startTime,
+                  endTime: updates.endTime,
+                  approvalStatus: 'pending',
+                  approvalComment: '',
+                  totalAmount: 0,
+                  status: 'pending',
+                }
+              : b
+          ),
+          bills: existingBill ? s.bills.filter((b) => b.id !== existingBill.id) : s.bills,
+          billSegments: existingBill
+            ? s.billSegments.filter((seg) => seg.billId !== existingBill.id)
+            : s.billSegments,
+        }))
+        return id
+      },
+
       addRateTier: (r) =>
         set((s) => ({ rateTiers: [...s.rateTiers, { ...r, id: uid() }] })),
 
@@ -162,6 +206,9 @@ export const useStore = create<AppState>()(
           state.rateTiers
         )
         const totalAmount = segments.reduce((sum, seg) => sum + seg.subtotal, 0)
+
+        if (totalAmount <= 0) return
+
         const billId = uid()
 
         const bill: Bill = {
@@ -178,6 +225,8 @@ export const useStore = create<AppState>()(
           billId,
         }))
 
+        const existingBill = state.bills.find((b) => b.bookingId === id)
+
         set((s) => ({
           bookings: s.bookings.map((b) =>
             b.id === id
@@ -190,8 +239,15 @@ export const useStore = create<AppState>()(
                 }
               : b
           ),
-          bills: [...s.bills, bill],
-          billSegments: [...s.billSegments, ...billSegs],
+          bills: existingBill
+            ? s.bills.map((b) => (b.id === existingBill.id ? bill : b))
+            : [...s.bills, bill],
+          billSegments: existingBill
+            ? [
+                ...s.billSegments.filter((seg) => seg.billId !== existingBill.id),
+                ...billSegs,
+              ]
+            : [...s.billSegments, ...billSegs],
         }))
       },
 

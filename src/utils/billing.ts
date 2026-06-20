@@ -1,12 +1,23 @@
 import type { RateTier, BillSegment } from '@/types'
-import { addDays, startOfDay, endOfDay } from 'date-fns'
+import { addDays, startOfDay } from 'date-fns'
 
-interface TimePoint {
-  time: Date
-  tierId: string
-  tierName: string
-  tierType: RateTier['type']
-  rate: number
+function findApplicableTier(
+  minutesFromMidnight: number,
+  tiers: RateTier[]
+): RateTier | null {
+  let best: RateTier | null = null
+  for (const tier of tiers) {
+    const [sh, sm] = tier.startTime.split(':').map(Number)
+    const [eh, em] = tier.endTime.split(':').map(Number)
+    const startMin = sh * 60 + sm
+    const endMin = eh * 60 + em
+    if (minutesFromMidnight >= startMin && minutesFromMidnight < endMin) {
+      if (!best || tier.sortOrder > best.sortOrder) {
+        best = tier
+      }
+    }
+  }
+  return best
 }
 
 export function computeBillSegments(
@@ -25,69 +36,62 @@ export function computeBillSegments(
 
   while (current < end) {
     const dayStart = startOfDay(current)
-    const dayEnd = endOfDay(current)
-    const segEnd = end < dayEnd ? end : dayEnd
+    const isLastDay = end <= new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
+    const activeStartMin =
+      current <= dayStart
+        ? 0
+        : current.getHours() * 60 + current.getMinutes()
+    const activeEndMin = isLastDay
+      ? end.getHours() * 60 + end.getMinutes()
+      : 1440
 
-    const points: TimePoint[] = sortedTiers.map((tier) => {
-      const [h, m] = tier.startTime.split(':').map(Number)
-      const pt = new Date(dayStart)
-      pt.setHours(h, m, 0, 0)
-      return {
-        time: pt,
-        tierId: tier.id,
-        tierName: tier.name,
-        tierType: tier.type,
-        rate: tier.pricePerHour,
-      }
-    })
+    if (activeStartMin >= activeEndMin) {
+      current = addDays(startOfDay(current), 1)
+      continue
+    }
 
-    const activeStart = current > dayStart ? current : dayStart
-    const activeEnd = segEnd
+    const boundarySet = new Set<number>()
+    boundarySet.add(activeStartMin)
+    boundarySet.add(activeEndMin)
+    for (const tier of sortedTiers) {
+      const [sh, sm] = tier.startTime.split(':').map(Number)
+      const [eh, em] = tier.endTime.split(':').map(Number)
+      boundarySet.add(sh * 60 + sm)
+      boundarySet.add(eh * 60 + em)
+    }
+    const boundaries = [...boundarySet].sort((a, b) => a - b)
 
-    let segCur = new Date(activeStart)
+    for (let i = 0; i < boundaries.length - 1; i++) {
+      const segStartMin = Math.max(boundaries[i], activeStartMin)
+      const segEndMin = Math.min(boundaries[i + 1], activeEndMin)
+      if (segStartMin >= segEndMin) continue
 
-    while (segCur < activeEnd) {
-      let bestTier: TimePoint | null = null
-      for (const pt of points) {
-        if (pt.time <= segCur) {
-          bestTier = pt
-        } else {
-          break
-        }
-      }
+      const midMin = (segStartMin + segEndMin) / 2
+      const tier = findApplicableTier(midMin, sortedTiers)
+      if (!tier) continue
 
-      if (!bestTier) {
-        bestTier = points[points.length - 1]
-      }
+      const segStartDate = new Date(dayStart)
+      segStartDate.setHours(Math.floor(segStartMin / 60), segStartMin % 60, 0, 0)
+      const segEndDate = new Date(dayStart)
+      segEndDate.setHours(Math.floor(segEndMin / 60), segEndMin % 60, 0, 0)
 
-      let nextBoundary = activeEnd
-      for (const pt of points) {
-        if (pt.time > segCur && pt.time < nextBoundary) {
-          nextBoundary = pt.time
-        }
-      }
-
-      const segStart = new Date(segCur)
-      const segStop = nextBoundary < activeEnd ? nextBoundary : activeEnd
-      const durationMs = segStop.getTime() - segStart.getTime()
+      const durationMs = segEndDate.getTime() - segStartDate.getTime()
       const durationHours = durationMs / (1000 * 60 * 60)
 
       if (durationHours > 0) {
         segments.push({
-          id: `${segStart.toISOString()}-${bestTier.tierId}`,
+          id: `${segStartDate.toISOString()}-${tier.id}`,
           billId: '',
-          rateTierId: bestTier.tierId,
-          rateTierName: bestTier.tierName,
-          rateTierType: bestTier.tierType,
-          segmentStart: segStart.toISOString(),
-          segmentEnd: segStop.toISOString(),
+          rateTierId: tier.id,
+          rateTierName: tier.name,
+          rateTierType: tier.type,
+          segmentStart: segStartDate.toISOString(),
+          segmentEnd: segEndDate.toISOString(),
           durationHours: Math.round(durationHours * 100) / 100,
-          rate: bestTier.rate,
-          subtotal: Math.round(durationHours * bestTier.rate * 100) / 100,
+          rate: tier.pricePerHour,
+          subtotal: Math.round(durationHours * tier.pricePerHour * 100) / 100,
         })
       }
-
-      segCur = new Date(segStop)
     }
 
     current = addDays(startOfDay(current), 1)
