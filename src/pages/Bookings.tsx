@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { Plus, Calendar, List, XCircle, AlertTriangle, Search, CalendarClock } from 'lucide-react'
-import { format, parseISO, startOfWeek, addDays, isSameDay } from 'date-fns'
+import { useState, useMemo } from 'react'
+import { Plus, Calendar, List, XCircle, AlertTriangle, Search, CalendarClock, Clock } from 'lucide-react'
+import { format, parseISO, startOfWeek, addDays, isSameDay, startOfDay, endOfDay } from 'date-fns'
 import { useStore } from '@/store'
 import type { Booking } from '@/types'
 
@@ -84,6 +84,46 @@ export default function Bookings() {
       return s <= addDays(day, 1) && e >= day
     })
   }
+
+  const availabilityTimeline = useMemo(() => {
+    if (!form.yachtId || !form.startTime) return null
+
+    const selectedDate = startOfDay(new Date(form.startTime))
+    const yachtBookings = bookings.filter((b) => {
+      if (b.yachtId !== form.yachtId || b.status === 'cancelled') return false
+      if (rescheduleId && b.id === rescheduleId) return false
+      const bStart = startOfDay(new Date(b.startTime))
+      return bStart.getTime() === selectedDate.getTime()
+    })
+
+    const hours: { label: string; occupied: boolean; booking?: Booking }[] = []
+    for (let h = 6; h <= 23; h++) {
+      const hourStart = new Date(selectedDate)
+      hourStart.setHours(h, 0, 0, 0)
+      const hourEnd = new Date(selectedDate)
+      hourEnd.setHours(h + 1, 0, 0, 0)
+
+      let occupied: Booking | undefined
+      for (const b of yachtBookings) {
+        const bs = new Date(b.startTime).getTime()
+        const be = new Date(b.endTime).getTime()
+        const hs = hourStart.getTime()
+        const he = hourEnd.getTime()
+        if (hs < be && bs < he) {
+          occupied = b
+          break
+        }
+      }
+
+      hours.push({
+        label: `${h.toString().padStart(2, '0')}:00`,
+        occupied: !!occupied,
+        booking: occupied,
+      })
+    }
+
+    return hours
+  }, [form.yachtId, form.startTime, bookings, rescheduleId])
 
   function handleCellClick(yachtId: string, day: Date) {
     const dateStr = format(day, 'yyyy-MM-dd')
@@ -538,6 +578,56 @@ export default function Bookings() {
                     />
                   </div>
                 </div>
+
+                {availabilityTimeline && availabilityTimeline.length > 0 && (
+                  <div className="pt-2">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Clock className="w-4 h-4 text-navy-500" />
+                      <label className="text-sm font-medium text-navy-700">
+                        当日可用时段
+                      </label>
+                    </div>
+                    <div className="bg-foam-50 rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-2 text-xs text-navy-500">
+                        <span className="flex items-center gap-1">
+                          <span className="w-3 h-3 rounded bg-green-400"></span> 可预订
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <span className="w-3 h-3 rounded bg-red-400"></span> 已占用
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {availabilityTimeline.map((hour, idx) => (
+                          <div
+                            key={idx}
+                            className={`flex-1 min-w-[40px] py-2 px-1 rounded text-center text-xs font-medium transition-colors ${
+                              hour.occupied
+                                ? 'bg-red-400 text-white cursor-not-allowed'
+                                : 'bg-green-400 text-white hover:bg-green-500 cursor-pointer'
+                            }`}
+                            title={
+                              hour.occupied && hour.booking
+                                ? `已被 ${hour.booking.customerName} 预订 (${format(parseISO(hour.booking.startTime), 'HH:mm')}-${format(parseISO(hour.booking.endTime), 'HH:mm')})`
+                                : `点击选择 ${hour.label} 开始`
+                            }
+                            onClick={() => {
+                              if (hour.occupied || !form.startTime) return
+                              const currentDate = format(new Date(form.startTime), 'yyyy-MM-dd')
+                              setForm((f) => ({
+                                ...f,
+                                startTime: `${currentDate}T${hour.label}`,
+                                endTime: `${currentDate}T${(parseInt(hour.label.split(':')[0]) + 2).toString().padStart(2, '0')}:00`,
+                              }))
+                              setTimeError(false)
+                            }}
+                          >
+                            {hour.label}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex justify-end gap-3 pt-2">
                   <button

@@ -2,7 +2,8 @@ export type YachtStatus = 'available' | 'maintenance' | 'retired'
 export type BookingStatus = 'pending' | 'confirmed' | 'cancelled' | 'completed'
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected'
 export type RateType = 'peak' | 'standard' | 'offpeak'
-export type BillStatus = 'unpaid' | 'paid'
+export type BillStatus = 'unpaid' | 'paid' | 'cancelled' | 'refund_pending'
+export type PaymentType = 'deposit' | 'balance' | 'full'
 
 export interface Yacht {
   id: string
@@ -43,8 +44,19 @@ export interface Bill {
   id: string
   bookingId: string
   totalAmount: number
+  depositAmount: number
+  paidAmount: number
   generatedAt: string
   status: BillStatus
+}
+
+export interface PaymentRecord {
+  id: string
+  billId: string
+  amount: number
+  type: PaymentType
+  paidAt: string
+  note: string
 }
 
 export interface BillSegment {

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { Yacht, Booking, RateTier, Bill, BillSegment } from '@/types'
+import type { Yacht, Booking, RateTier, Bill, BillSegment, PaymentRecord } from '@/types'
 import { computeBillSegments } from '@/utils/billing'
 
 function uid(): string {
@@ -13,6 +13,7 @@ interface AppState {
   rateTiers: RateTier[]
   bills: Bill[]
   billSegments: BillSegment[]
+  paymentRecords: PaymentRecord[]
 
   addYacht: (y: Omit<Yacht, 'id'>) => void
   updateYacht: (id: string, y: Partial<Yacht>) => void
@@ -30,7 +31,8 @@ interface AppState {
   approveBooking: (id: string, comment: string) => void
   rejectBooking: (id: string, comment: string) => void
 
-  payBill: (id: string) => void
+  addPayment: (billId: string, payment: Omit<PaymentRecord, 'id' | 'billId'>) => void
+  refundBill: (billId: string, note: string) => void
 }
 
 const defaultYachts: Yacht[] = [
@@ -100,6 +102,7 @@ export const useStore = create<AppState>()(
       rateTiers: defaultRateTiers,
       bills: [],
       billSegments: [],
+      paymentRecords: [],
 
       addYacht: (y) =>
         set((s) => ({ yachts: [...s.yachts, { ...y, id: uid() }] })),
@@ -136,12 +139,24 @@ export const useStore = create<AppState>()(
         return id
       },
 
-      cancelBooking: (id) =>
+      cancelBooking: (id) => {
+        const state = get()
+        const existingBill = state.bills.find((b) => b.bookingId === id)
+        const hasPayments = existingBill ? state.paymentRecords.some((p) => p.billId === existingBill.id) : false
+
         set((s) => ({
           bookings: s.bookings.map((b) =>
             b.id === id ? { ...b, status: 'cancelled' } : b
           ),
-        })),
+          bills: existingBill
+            ? s.bills.map((b) =>
+                b.id === existingBill.id
+                  ? { ...b, status: hasPayments ? 'refund_pending' : 'cancelled' }
+                  : b
+              )
+            : s.bills,
+        }))
+      },
 
       completeBooking: (id) =>
         set((s) => ({
@@ -174,10 +189,15 @@ export const useStore = create<AppState>()(
                 }
               : b
           ),
-          bills: existingBill ? s.bills.filter((b) => b.id !== existingBill.id) : s.bills,
+          bills: existingBill
+            ? s.bills.filter((b) => b.id !== existingBill.id)
+            : s.bills,
           billSegments: existingBill
             ? s.billSegments.filter((seg) => seg.billId !== existingBill.id)
             : s.billSegments,
+          paymentRecords: existingBill
+            ? s.paymentRecords.filter((p) => p.billId !== existingBill.id)
+            : s.paymentRecords,
         }))
         return id
       },
@@ -210,11 +230,14 @@ export const useStore = create<AppState>()(
         if (totalAmount <= 0) return
 
         const billId = uid()
+        const depositAmount = Math.round(totalAmount * 0.3 * 100) / 100
 
         const bill: Bill = {
           id: billId,
           bookingId: id,
           totalAmount: Math.round(totalAmount * 100) / 100,
+          depositAmount,
+          paidAmount: 0,
           generatedAt: new Date().toISOString(),
           status: 'unpaid',
         }
@@ -260,10 +283,38 @@ export const useStore = create<AppState>()(
           ),
         })),
 
-      payBill: (id) =>
+      addPayment: (billId, payment) => {
+        const state = get()
+        const bill = state.bills.find((b) => b.id === billId)
+        if (!bill) return
+
+        const newPaidAmount = Math.min(bill.paidAmount + payment.amount, bill.totalAmount)
+        const newStatus: Bill['status'] =
+          newPaidAmount >= bill.totalAmount - 0.01 ? 'paid' : bill.status
+
+        const record: PaymentRecord = {
+          ...payment,
+          id: uid(),
+          billId,
+        }
+
         set((s) => ({
-          bills: s.bills.map((b) => (b.id === id ? { ...b, status: 'paid' } : b)),
-        })),
+          paymentRecords: [...s.paymentRecords, record],
+          bills: s.bills.map((b) =>
+            b.id === billId
+              ? { ...b, paidAmount: newPaidAmount, status: newStatus }
+              : b
+          ),
+        }))
+      },
+
+      refundBill: (billId, note) => {
+        set((s) => ({
+          bills: s.bills.map((b) =>
+            b.id === billId ? { ...b, status: 'refund_pending' } : b
+          ),
+        }))
+      },
     }),
     {
       name: 'yacht-charter-storage',

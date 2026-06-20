@@ -36,14 +36,24 @@ export function computeBillSegments(
 
   while (current < end) {
     const dayStart = startOfDay(current)
-    const isLastDay = end <= new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
+    const nextDayStart = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
+    const isLastDay = end <= nextDayStart
     const activeStartMin =
       current <= dayStart
         ? 0
         : current.getHours() * 60 + current.getMinutes()
-    const activeEndMin = isLastDay
-      ? end.getHours() * 60 + end.getMinutes()
-      : 1440
+    let activeEndMin: number
+    if (isLastDay) {
+      const endH = end.getHours()
+      const endM = end.getMinutes()
+      if (endH === 0 && endM === 0) {
+        activeEndMin = 1440
+      } else {
+        activeEndMin = endH * 60 + endM
+      }
+    } else {
+      activeEndMin = 1440
+    }
 
     if (activeStartMin >= activeEndMin) {
       current = addDays(startOfDay(current), 1)
